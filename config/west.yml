@@ -8,6 +8,16 @@ manifest:
     - name: zmk
       remote: refil
       revision: adv360-z3.5-2
-      import: app/west.yml
+      import:
+        file: app/west.yml
+        name-allowlist:
+          - zephyr
+          - cmsis
+          - hal_nordic
+          - tinycrypt
+          - lvgl
+          - segger
+          - nanopb
+          - zmk-studio-messages
   self:
     path: config

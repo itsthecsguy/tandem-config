@@ -36,15 +36,13 @@ jobs:
             zephyr/
             bootloader/
             zmk/
-          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('config/west.yml') }}
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-tandem-${{ hashFiles('config/west.yml') }}
           restore-keys: |
-            ${{ runner.os }}-build-${{ env.cache-name }}-
-            ${{ runner.os }}-build-
-            ${{ runner.os }}-
+            ${{ runner.os }}-build-${{ env.cache-name }}-tandem-
       - name: West Init
         run: west init -l config
       - name: West Update
-        run: west update
+        run: west update --narrow -o=--depth=1
       - name: West Zephyr export
         run: west zephyr-export
       - name: West Build (left)
@@ -97,15 +95,13 @@ jobs:
             zephyr/
             bootloader/
             zmk/
-          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('config/west.yml') }}
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-tandem-${{ hashFiles('config/west.yml') }}
           restore-keys: |
-            ${{ runner.os }}-build-${{ env.cache-name }}-
-            ${{ runner.os }}-build-
-            ${{ runner.os }}-
+            ${{ runner.os }}-build-${{ env.cache-name }}-tandem-
       - name: West Init
         run: west init -l config
       - name: West Update
-        run: west update
+        run: west update --narrow -o=--depth=1
       - name: West Zephyr export
         run: west zephyr-export
       - name: West Build (left)
