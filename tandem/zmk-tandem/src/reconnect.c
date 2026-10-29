@@ -8,10 +8,13 @@
  * advertising only when something changes, and if the radio refuses then,
  * ZMK gives up.
  *
- * So every few seconds, and soon after a host disconnects, this checks that
- * the keyboard is advertising while any paired host is away. When ZMK should
- * be advertising and isn't, ZMK restarts it. When only a host on another
- * profile is away, this advertises for it, the same way ZMK does.
+ * So every few seconds, and soon after a host disconnects or the profile
+ * changes, this checks that the keyboard is advertising while any paired
+ * host is away. When ZMK should be advertising and isn't, ZMK restarts it.
+ * When only a host on another profile is away, this advertises for it: as
+ * fast as ZMK does at first, then about once a second to save the battery.
+ * That host gets no keys until its profile is selected, and selecting it
+ * makes ZMK advertise fast again, so it only has to reconnect by then.
  */
 
 #include <errno.h>
@@ -23,14 +26,22 @@
 #include <zephyr/logging/log.h>
 
 #include <zmk/ble.h>
+#include <zmk/event_manager.h>
+#include <zmk/events/ble_active_profile_changed.h>
 
 LOG_MODULE_REGISTER(tandem_reconnect, CONFIG_ZMK_LOG_LEVEL);
 
-/* ZMK's own advertising, from app/src/ble.c. */
-static const struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
-    BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_ONE_TIME | BT_LE_ADV_OPT_USE_NAME |
-        BT_LE_ADV_OPT_FORCE_NAME_IN_AD,
-    BT_GAP_ADV_FAST_INT_MIN_2, BT_GAP_ADV_FAST_INT_MAX_2, NULL);
+#define ADV_OPTIONS                                                                                \
+    (BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_ONE_TIME | BT_LE_ADV_OPT_USE_NAME |                 \
+     BT_LE_ADV_OPT_FORCE_NAME_IN_AD)
+
+/* ZMK's own advertising, from app/src/ble.c, every 100 to 150 ms. */
+static const struct bt_le_adv_param fast_param =
+    BT_LE_ADV_PARAM_INIT(ADV_OPTIONS, BT_GAP_ADV_FAST_INT_MIN_2, BT_GAP_ADV_FAST_INT_MAX_2, NULL);
+
+/* The same every 1 to 1.2 s. */
+static const struct bt_le_adv_param slow_param =
+    BT_LE_ADV_PARAM_INIT(ADV_OPTIONS, BT_GAP_ADV_SLOW_INT_MIN, BT_GAP_ADV_SLOW_INT_MAX, NULL);
 
 static const struct bt_data adv_data[] = {
     BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE, 0xC1, 0x03),
@@ -40,8 +51,12 @@ static const struct bt_data adv_data[] = {
                   ),
 };
 
-/* Whether advertising that's running was started here rather than by ZMK. */
+/* Whether advertising that's running was started here rather than by ZMK, and at which pace. */
 static bool started_here;
+static bool started_slow;
+
+/* When a host on another profile was first found away, or 0 while none is. */
+static int64_t away_since;
 
 /*
  * Returns 0 if advertising is off, and leaves it off. Returns -EALREADY if
@@ -50,7 +65,7 @@ static bool started_here;
  * advertiser alone.
  */
 static int probe(void) {
-    int err = bt_le_adv_start(&adv_param, adv_data, ARRAY_SIZE(adv_data), NULL, 0);
+    int err = bt_le_adv_start(&fast_param, adv_data, ARRAY_SIZE(adv_data), NULL, 0);
 
     if (!err) {
         bt_le_adv_stop();
@@ -77,6 +92,13 @@ static void find_away(const struct bt_bond_info *bond, void *away) {
     }
 }
 
+static void stop_here(void) {
+    if (started_here) {
+        bt_le_adv_stop();
+        started_here = false;
+    }
+}
+
 static void check(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(check_work, check);
 
@@ -84,43 +106,63 @@ static void check(struct k_work *work) {
     k_work_schedule(&check_work, K_SECONDS(CONFIG_TANDEM_RECONNECT_INTERVAL));
 
     /* The same rule ZMK uses for when to advertise. */
-    bool zmk_wants = zmk_ble_active_profile_is_open() || !zmk_ble_active_profile_is_connected();
-    bool away = false;
-
-    if (!zmk_wants) {
-        bt_foreach_bond(BT_ID_DEFAULT, find_away, &away);
-    }
-    if (!zmk_wants && !away) {
+    if (zmk_ble_active_profile_is_open() || !zmk_ble_active_profile_is_connected()) {
+        away_since = 0;
         if (started_here) {
-            bt_le_adv_stop();
-            started_here = false;
+            /*
+             * Advertising from here was running, so ZMK's own start failed.
+             * Stop it, and let ZMK advertise at its own pace.
+             */
+            stop_here();
+        } else {
+            int err = probe();
+            if (err) {
+                /*
+                 * -EALREADY means advertising is on. Some other errors come
+                 * before Zephyr looks, so it may be on then too.
+                 */
+                if (err != -EALREADY) {
+                    LOG_WRN("Couldn't check advertising (err %d)", err);
+                }
+                return;
+            }
+            LOG_WRN("Advertising had stopped, restarting it");
         }
+        zmk_ble_set_device_name((char *)bt_get_name());
         return;
+    }
+
+    bool away = false;
+    bt_foreach_bond(BT_ID_DEFAULT, find_away, &away);
+    if (!away) {
+        away_since = 0;
+        stop_here();
+        return;
+    }
+
+    int64_t now = k_uptime_get();
+    if (!away_since) {
+        away_since = now;
+    }
+    bool slow = now - away_since >= CONFIG_TANDEM_RECONNECT_FAST_SECONDS * MSEC_PER_SEC;
+    if (started_here && started_slow != slow) {
+        stop_here();
     }
 
     int err = probe();
     if (err) {
-        /*
-         * -EALREADY means advertising is on. Some other errors come before
-         * Zephyr looks, so advertising may be on then too. Leave it alone.
-         */
         if (err != -EALREADY) {
             LOG_WRN("Couldn't check advertising (err %d)", err);
         }
         return;
     }
 
-    if (zmk_wants) {
-        /* Hand it back to ZMK, which restarts it its way. */
-        started_here = false;
-        LOG_WRN("Advertising had stopped, restarting it");
-        zmk_ble_set_device_name((char *)bt_get_name());
-        return;
-    }
-
-    err = bt_le_adv_start(&adv_param, adv_data, ARRAY_SIZE(adv_data), NULL, 0);
+    err = bt_le_adv_start(slow ? &slow_param : &fast_param, adv_data, ARRAY_SIZE(adv_data), NULL,
+                          0);
     started_here = !err;
-    LOG_INF("Advertising for a host on another profile (err %d)", err);
+    started_slow = slow;
+    LOG_INF("Advertising %s for a host on another profile (err %d)", slow ? "slowly" : "fast",
+            err);
 }
 
 static void connected(struct bt_conn *conn, uint8_t err) {
@@ -137,7 +179,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
 
     /* Check soon after a host disconnects, once ZMK's own restart has run. */
     if (bt_conn_get_info(conn, &info) == 0 && info.role == BT_CONN_ROLE_PERIPHERAL) {
-        k_work_reschedule(&check_work, K_SECONDS(1));
+        k_work_reschedule(&check_work, K_MSEC(100));
     }
 }
 
@@ -145,6 +187,15 @@ BT_CONN_CB_DEFINE(tandem_reconnect_conn_cb) = {
     .connected = connected,
     .disconnected = disconnected,
 };
+
+/* Selecting another profile may need advertising, or ZMK's own instead of this. */
+static int profile_changed(const zmk_event_t *eh) {
+    k_work_reschedule(&check_work, K_MSEC(100));
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+ZMK_LISTENER(tandem_reconnect, profile_changed);
+ZMK_SUBSCRIPTION(tandem_reconnect, zmk_ble_active_profile_changed);
 
 static int tandem_reconnect_init(void) {
     k_work_schedule(&check_work, K_SECONDS(CONFIG_TANDEM_RECONNECT_INTERVAL));

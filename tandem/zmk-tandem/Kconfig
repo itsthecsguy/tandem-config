@@ -40,3 +40,13 @@ config TANDEM_RECONNECT_INTERVAL
     int "Seconds between checks"
     default 5
     depends on TANDEM_RECONNECT
+
+config TANDEM_RECONNECT_FAST_SECONDS
+    int "Seconds to advertise fast for a host on another profile"
+    default 30
+    depends on TANDEM_RECONNECT
+    help
+      For this long after a host on another profile goes away, the keyboard
+      advertises as fast as ZMK does, every 100 to 150 ms, so a short drop
+      recovers in about a second. After that it advertises every 1 to 1.2 s,
+      and the host takes a few seconds to reconnect once it's back.
