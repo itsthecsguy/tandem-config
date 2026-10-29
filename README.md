@@ -12,7 +12,7 @@ Either way you get a repo of your own with fresh history. It can be private, whi
 ## What's here
 
 - `config/` Kinesis's config. `config/adv360.keymap` is your layout.
-- `tandem/zmk-tandem/` Tandem's firmware module. It lets each half restart into update mode on request and report its build and layout.
+- `tandem/zmk-tandem/` Tandem's firmware module. It lets each half restart into update mode on request and report its build and layout. It also lets every paired computer reconnect over Bluetooth, not just the active profile's.
 - `.github/workflows/build.yml` Kinesis's build workflow, with the module added. Every push builds firmware for both halves.
 - `bin/get_version.sh` and `settings-reset.uf2` from Kinesis. The workflow uses the script. Flashing the reset file to a half clears its saved settings, including Bluetooth pairings.
 

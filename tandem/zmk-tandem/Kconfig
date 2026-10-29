@@ -21,3 +21,22 @@ config TANDEM_REPO
     default ""
 
 endif
+
+config TANDEM_RECONNECT
+    bool "Let every paired host reconnect over Bluetooth"
+    default y
+    depends on ZMK_BLE && (!ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL)
+    # It checks for advertising by starting it. With extended advertising, a
+    # failed start makes Zephyr forget the advertiser that's running.
+    depends on !BT_EXT_ADV
+    help
+      ZMK advertises only while the active profile's host is away, so a host
+      paired on another profile that loses its connection can't reconnect
+      while the active host stays connected. ZMK also gives up if the radio
+      refuses to start advertising. This checks every few seconds, and
+      advertises whenever a paired host is away.
+
+config TANDEM_RECONNECT_INTERVAL
+    int "Seconds between checks"
+    default 5
+    depends on TANDEM_RECONNECT

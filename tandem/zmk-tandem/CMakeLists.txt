@@ -1,8 +1,12 @@
-if(CONFIG_TANDEM_AUTOFLASH)
+if(CONFIG_TANDEM_AUTOFLASH OR CONFIG_TANDEM_RECONNECT)
   zephyr_library()
-  zephyr_library_sources(src/autoflash.c)
-  # ZMK's own headers, for RST_UF2.
+  # ZMK's own headers, for RST_UF2 and zmk/ble.h.
   zephyr_library_include_directories(${APPLICATION_SOURCE_DIR}/include)
+  zephyr_library_sources_ifdef(CONFIG_TANDEM_RECONNECT src/reconnect.c)
+endif()
+
+if(CONFIG_TANDEM_AUTOFLASH)
+  zephyr_library_sources(src/autoflash.c)
 
   # Embed the main keymap file, so the app can read the layout back from the
   # keyboard. The per-half .keymap files only include it, so look for the one
